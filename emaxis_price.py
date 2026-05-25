@@ -1,9 +1,18 @@
 import requests, os
 from datetime import datetime
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Referer": "https://emaxis.am.mufg.jp/fund/253425.html",
+    "Origin": "https://emaxis.am.mufg.jp",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "ja-JP,ja;q=0.9",
+}
 
 r = requests.get("https://emaxis.am.mufg.jp/mukamapi/fund_details/?fund_cd=253425", headers=HEADERS, timeout=10)
+print("ステータス:", r.status_code)
+print("レスポンス:", r.text[:200])
+
 data = r.json()["datasets"]
 
 price    = int(data["cfm_base_price"])
