@@ -1,6 +1,7 @@
 import requests, os, re
 from bs4 import BeautifulSoup
 from urllib.parse import quote
+from datetime import date, timedelta
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -12,32 +13,37 @@ def fetch_toushin(isin):
         r = requests.get(f"https://toushin-lib.fwg.ne.jp/FdsWeb/FDST030000?isinCd={isin}", headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
         lines = [l.strip() for l in soup.get_text().split("\n") if l.strip()]
-        price = change = date = pct = None
+        price = change = date_str = pct = None
         for line in lines:
             if "基準日" in line:
                 m = re.search(r'\d{4}年\d{1,2}月\d{1,2}日', line)
                 if m:
-                    date = m.group()
-            if re.match(r'^\d{2,3},\d{3}$', line) and price is None:
+                    date_str = m.group()
+            if re.match(r'^\d{1,3},\d{3}$', line) and price is None:
                 price = int(line.replace(",", ""))
-            if price and change is None and re.match(r'^-?\d{1,3}$', line):
+            if price and change is None and re.match(r'^-?\d{1,4}$', line):
                 change = int(line)
             if re.match(r'^\([+-]?\d+\.\d+%\)$', line) and pct is None:
                 pct = line.strip("()")
-        return price, change, date, pct
+        return price, change, date_str, pct
     except:
         return None, None, None, None
 
-def fetch_yahoo(symbol):
+def fetch_stooq(symbol):
     try:
-        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{quote(symbol)}"
-        r = requests.get(url, params={"interval": "1d", "range": "2d"}, headers={**HEADERS, "Accept": "application/json"}, timeout=10)
-        result = r.json()["chart"]["result"][0]
-        closes = [c for c in result["indicators"]["quote"][0]["close"] if c is not None]
-        price = closes[-1]
-        prev = closes[-2] if len(closes) >= 2 else None
-        change = round(price - prev, 4) if prev else None
-        pct = round(change / prev * 100, 2) if prev else None
+        d2 = date.today().strftime("%Y%m%d")
+        d1 = (date.today() - timedelta(days=10)).strftime("%Y%m%d")
+        url = f"https://stooq.com/q/d/l/?s={quote(symbol)}&d1={d1}&d2={d2}&i=d"
+        r = requests.get(url, timeout=10)
+        rows = [l for l in r.text.strip().split("\n")[1:] if l.strip()]
+        if len(rows) < 2:
+            return None, None, None
+        curr = rows[-1].split(",")
+        prev = rows[-2].split(",")
+        price = float(curr[4])
+        prev_price = float(prev[4])
+        change = round(price - prev_price, 4)
+        pct = round(change / prev_price * 100, 2)
         return price, change, pct
     except:
         return None, None, None
@@ -59,13 +65,17 @@ def fetch_tanaka_gold():
         soup = BeautifulSoup(r.text, "html.parser")
         for row in soup.find_all("tr"):
             cells = row.find_all(["td", "th"])
-            if cells and re.fullmatch(r'金', cells[0].get_text(strip=True)):
-                for cell in cells[1:]:
-                    m = re.search(r'[\d,]+', cell.get_text())
+            texts = [c.get_text(strip=True) for c in cells]
+            if texts and re.fullmatch(r'金', texts[0]):
+                prices = []
+                for t in texts[1:]:
+                    m = re.search(r'([\d,]+)', t)
                     if m:
-                        price = int(m.group().replace(",", ""))
-                        if 5000 <= price <= 30000:
-                            return price
+                        v = int(m.group().replace(",", ""))
+                        if 5000 <= v <= 30000:
+                            prices.append(v)
+                if prices:
+                    return prices[0]
         return None
     except:
         return None
@@ -79,29 +89,29 @@ def fmt(v, d=0):
     return f"{v:,.{d}f}" if d else f"{round(v):,}"
 
 def fund_line(name, data):
-    price, change, date, pct = data
+    price, change, date_str, pct = data
     if price is None:
         return f"{name}: 取得失敗"
-    return f"{name}: {fmt(price)} 円  {sgn(change)} {fmt(abs(change or 0))} ({pct})  {date}"
+    return f"{name}: {fmt(price)} 円  {sgn(change)} {fmt(abs(change or 0))} ({pct})  {date_str}"
 
-def stock_line(name, data, decimals=0):
+def stock_line(name, data, d=0):
     price, change, pct = data
     if price is None:
         return f"{name}: 取得失敗"
-    return f"{name}: {fmt(price, decimals)} 円  {sgn(change)} {fmt(abs(change or 0), decimals)} ({fmt(pct, 2)}%)"
+    return f"{name}: {fmt(price, d)} 円  {sgn(change)} {fmt(abs(change or 0), d)} ({fmt(pct, 2)}%)"
 
-def crypto_line(name, d):
-    p = d.get("jpy")
-    c = d.get("jpy_24h_change")
+def crypto_line(name, dct):
+    p = dct.get("jpy")
+    c = dct.get("jpy_24h_change")
     if p is None:
         return f"{name}: 取得失敗"
     return f"{name}: {fmt(p)} 円  {sgn(c)} {fmt(abs(c or 0), 2)}%"
 
 orkan  = fetch_toushin("JP90C000H1T1")
 sp500  = fetch_toushin("JP90C000H474")
-aeon   = fetch_yahoo("8267.T")
-nikkei = fetch_yahoo("^N225")
-usdjpy = fetch_yahoo("USDJPY=X")
+aeon   = fetch_stooq("8267.JP")
+nikkei = fetch_stooq("^NKX")
+usdjpy = fetch_stooq("USDJPY")
 gold   = fetch_tanaka_gold()
 crypto = fetch_crypto()
 
