@@ -1,0 +1,20 @@
+name: 毎日オルカン価格をLINEに送信
+
+on:
+  schedule:
+    - cron: '0 23 * * 1-5'  # 平日の朝8時（日本時間）
+  workflow_dispatch:  # 手動でも実行できる
+
+jobs:
+  send-price:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python emaxis_price.py
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
