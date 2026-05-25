@@ -1,5 +1,4 @@
 import requests, os
-from bs4 import BeautifulSoup
 from datetime import datetime
 
 HEADERS = {
