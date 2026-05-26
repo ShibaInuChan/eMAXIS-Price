@@ -7,42 +7,8 @@ HEADERS = {
     "Accept-Language": "ja-JP,ja;q=0.9",
 }
 
-def find_sp500_isin():
-    base = "https://toushin-lib.fwg.ne.jp"
-    search_url = base + "/FdsWeb/FDST999900"
-
-    # t_keyword で GET/POST し、HTMLにISINパターンが含まれるか直接確認
-    for method, kwargs in [
-        ("GET",  {"params": {"t_keyword": "eMAXIS Slim 米国株式", "t_kensakuKbn": "1"}}),
-        ("POST", {"data":   {"t_keyword": "eMAXIS Slim 米国株式", "t_kensakuKbn": "1"}}),
-    ]:
-        try:
-            fn = requests.get if method == "GET" else requests.post
-            r = fn(search_url, headers=HEADERS, timeout=10, **kwargs)
-            isins = re.findall(r'JP90C[A-Z0-9]{7}', r.text)
-            print(f"[DEBUG] {method} t_keyword: status={r.status_code} ISINs={isins[:5]}")
-            for isin in isins:
-                if isin != "JP90C000H1T1":
-                    print(f"[DEBUG] S&P500 candidate: {isin}")
-                    return isin
-        except Exception as e:
-            print(f"[ERROR] {method} search: {e}")
-
-    # AM MUFG公式サイトから試す（253266周辺が有力）
-    for code in ["253266", "253265", "253267", "253268", "253269"]:
-        try:
-            r = requests.get(f"https://www.am.mufg.jp/fund/{code}.html", headers=HEADERS, timeout=5)
-            print(f"[DEBUG] am.mufg/{code}: {r.status_code}")
-            if r.status_code == 200:
-                isins = re.findall(r'JP90C[A-Z0-9]{7}', r.text)
-                title = re.search(r'<title>(.*?)</title>', r.text)
-                print(f"[DEBUG] title={title.group(1)[:60] if title else '?'} ISINs={isins[:3]}")
-                if ("S&P" in r.text or "米国株式" in r.text) and isins:
-                    return isins[0]
-        except Exception as e:
-            print(f"[ERROR] am.mufg/{code}: {e}")
-
-    return None
+ISIN_ORKAN = "JP90C000H1T1"
+ISIN_SP500 = "JP90C000GKC6"
 
 def fetch_toushin(isin):
     try:
@@ -144,9 +110,8 @@ def crypto_line(name, dct):
         return f"➖ {name}: 取得失敗"
     return f"{trend(c)} {name}: {fmt(p)} 円  {sgn(c)} {fmt(abs(c or 0), 2)}%"
 
-sp500_isin = find_sp500_isin()
-orkan  = fetch_toushin("JP90C000H1T1")
-sp500  = fetch_toushin(sp500_isin) if sp500_isin else (None, None, None, None)
+orkan  = fetch_toushin(ISIN_ORKAN)
+sp500  = fetch_toushin(ISIN_SP500)
 aeon   = fetch_yf("8267.T")
 nikkei = fetch_yf("^N225")
 usdjpy = fetch_yf("USDJPY=X")
