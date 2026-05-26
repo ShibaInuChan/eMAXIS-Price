@@ -10,55 +10,38 @@ HEADERS = {
 def find_sp500_isin():
     base = "https://toushin-lib.fwg.ne.jp"
     search_url = base + "/FdsWeb/FDST999900"
-    try:
-        # フォーム構造を確認
-        r = requests.get(search_url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        for form in soup.find_all("form"):
-            print(f"[DEBUG] form action={form.get('action')} method={form.get('method')}")
-            for inp in form.find_all(["input", "select"]):
-                print(f"[DEBUG] field name={inp.get('name')} type={inp.get('type')} value={str(inp.get('value',''))[:30]}")
 
-        # ベースページのisinCdリンク数確認
-        base_isins = [a for a in soup.find_all("a", href=True) if "isinCd=" in a["href"]]
-        print(f"[DEBUG] isinCd links in base page: {len(base_isins)}")
-        for a in base_isins[:3]:
-            print(f"[DEBUG] sample: {a['href'][:80]} text={a.get_text(strip=True)[:40]}")
+    # t_keyword で GET/POST し、HTMLにISINパターンが含まれるか直接確認
+    for method, kwargs in [
+        ("GET",  {"params": {"t_keyword": "eMAXIS Slim 米国株式", "t_kensakuKbn": "1"}}),
+        ("POST", {"data":   {"t_keyword": "eMAXIS Slim 米国株式", "t_kensakuKbn": "1"}}),
+    ]:
+        try:
+            fn = requests.get if method == "GET" else requests.post
+            r = fn(search_url, headers=HEADERS, timeout=10, **kwargs)
+            isins = re.findall(r'JP90C[A-Z0-9]{7}', r.text)
+            print(f"[DEBUG] {method} t_keyword: status={r.status_code} ISINs={isins[:5]}")
+            for isin in isins:
+                if isin != "JP90C000H1T1":
+                    print(f"[DEBUG] S&P500 candidate: {isin}")
+                    return isin
+        except Exception as e:
+            print(f"[ERROR] {method} search: {e}")
 
-        # POST で検索
-        r2 = requests.post(
-            search_url,
-            data={"fundNm": "eMAXIS Slim 米国株式"},
-            headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
-            timeout=10
-        )
-        soup2 = BeautifulSoup(r2.text, "html.parser")
-        print(f"[DEBUG] POST status={r2.status_code}")
-        for a in soup2.find_all("a", href=True):
-            href = a["href"]
-            text = a.get_text(strip=True)
-            if "isinCd=" in href:
-                m = re.search(r"isinCd=([A-Z0-9]+)", href)
-                if m:
-                    print(f"[DEBUG] POST isin={m.group(1)} text={text[:50]}")
-                    if any(k in text for k in ["S&P", "米国株式"]):
-                        return m.group(1)
+    # AM MUFG公式サイトから試す（253266周辺が有力）
+    for code in ["253266", "253265", "253267", "253268", "253269"]:
+        try:
+            r = requests.get(f"https://www.am.mufg.jp/fund/{code}.html", headers=HEADERS, timeout=5)
+            print(f"[DEBUG] am.mufg/{code}: {r.status_code}")
+            if r.status_code == 200:
+                isins = re.findall(r'JP90C[A-Z0-9]{7}', r.text)
+                title = re.search(r'<title>(.*?)</title>', r.text)
+                print(f"[DEBUG] title={title.group(1)[:60] if title else '?'} ISINs={isins[:3]}")
+                if ("S&P" in r.text or "米国株式" in r.text) and isins:
+                    return isins[0]
+        except Exception as e:
+            print(f"[ERROR] am.mufg/{code}: {e}")
 
-        # GET で異なるパラメータを試す
-        for params in [{"fundNm": "eMAXIS Slim 米国株式"}, {"keyword": "eMAXIS Slim 米国株式"}, {"q": "eMAXIS Slim 米国株式"}]:
-            r3 = requests.get(search_url, params=params, headers=HEADERS, timeout=10)
-            soup3 = BeautifulSoup(r3.text, "html.parser")
-            links = [a for a in soup3.find_all("a", href=True) if "isinCd=" in a["href"]]
-            print(f"[DEBUG] GET {list(params.keys())[0]}: isinCd links={len(links)}")
-            for a in links[:3]:
-                m = re.search(r"isinCd=([A-Z0-9]+)", a["href"])
-                text = a.get_text(strip=True)
-                if m:
-                    print(f"[DEBUG] - isin={m.group(1)} text={text[:50]}")
-                    if any(k in text for k in ["S&P", "米国株式"]):
-                        return m.group(1)
-    except Exception as e:
-        print(f"[ERROR] find_sp500_isin: {e}")
     return None
 
 def fetch_toushin(isin):
