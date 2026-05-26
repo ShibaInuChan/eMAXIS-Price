@@ -13,6 +13,7 @@ def fetch_toushin(isin):
         r = requests.get(f"https://toushin-lib.fwg.ne.jp/FdsWeb/FDST030000?isinCd={isin}", headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
         lines = [l.strip() for l in soup.get_text().split("\n") if l.strip()]
+        print(f"[DEBUG] toushin {isin} first30lines: {lines[:30]}")
         price = change = date_str = pct = None
         for line in lines:
             if "基準日" in line:
@@ -25,9 +26,31 @@ def fetch_toushin(isin):
                 change = int(line)
             if re.match(r'^\([+-]?\d+\.\d+%\)$', line) and pct is None:
                 pct = line.strip("()")
+        print(f"[DEBUG] toushin {isin}: price={price}, change={change}, date={date_str}, pct={pct}")
         return price, change, date_str, pct
-    except:
+    except Exception as e:
+        print(f"[ERROR] toushin {isin}: {e}")
         return None, None, None, None
+
+def fetch_yahoo_v7(symbol):
+    try:
+        r = requests.get(
+            f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={quote(symbol)}",
+            headers={**HEADERS, "Accept": "application/json"},
+            timeout=10
+        )
+        print(f"[DEBUG] yahoo_v7 {symbol} status={r.status_code} body={r.text[:300]}")
+        results = r.json()["quoteResponse"]["result"]
+        if not results:
+            return None, None, None
+        d = results[0]
+        price = d.get("regularMarketPrice")
+        change = d.get("regularMarketChange")
+        pct = d.get("regularMarketChangePercent")
+        return price, change, pct
+    except Exception as e:
+        print(f"[ERROR] yahoo_v7 {symbol}: {e}")
+        return None, None, None
 
 def fetch_stooq(symbol):
     try:
@@ -35,6 +58,7 @@ def fetch_stooq(symbol):
         d1 = (date.today() - timedelta(days=10)).strftime("%Y%m%d")
         url = f"https://stooq.com/q/d/l/?s={quote(symbol)}&d1={d1}&d2={d2}&i=d"
         r = requests.get(url, timeout=10)
+        print(f"[DEBUG] stooq {symbol} status={r.status_code} body={r.text[:200]}")
         rows = [l for l in r.text.strip().split("\n")[1:] if l.strip()]
         if len(rows) < 2:
             return None, None, None
@@ -45,8 +69,15 @@ def fetch_stooq(symbol):
         change = round(price - prev_price, 4)
         pct = round(change / prev_price * 100, 2)
         return price, change, pct
-    except:
+    except Exception as e:
+        print(f"[ERROR] stooq {symbol}: {e}")
         return None, None, None
+
+def fetch_market(yf_symbol, stooq_symbol):
+    price, change, pct = fetch_yahoo_v7(yf_symbol)
+    if price is not None:
+        return price, change, pct
+    return fetch_stooq(stooq_symbol)
 
 def fetch_crypto():
     try:
@@ -56,28 +87,49 @@ def fetch_crypto():
             timeout=10
         )
         return r.json()
-    except:
+    except Exception as e:
+        print(f"[ERROR] crypto: {e}")
         return {}
 
 def fetch_tanaka_gold():
     try:
         r = requests.get("https://gold.tanaka.co.jp/commodity/souba/", headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
+
+        # Find which column index is 店頭小売価格
+        retail_col = None
+        for row in soup.find_all("tr"):
+            cells = row.find_all(["td", "th"])
+            texts = [c.get_text(strip=True) for c in cells]
+            print(f"[DEBUG] tanaka row: {texts}")
+            for i, t in enumerate(texts):
+                if "小売" in t or "販売" in t:
+                    retail_col = i
+            if retail_col is not None:
+                break
+
+        print(f"[DEBUG] tanaka retail_col={retail_col}")
+
         for row in soup.find_all("tr"):
             cells = row.find_all(["td", "th"])
             texts = [c.get_text(strip=True) for c in cells]
             if texts and re.fullmatch(r'金', texts[0]):
-                prices = []
-                for t in texts[1:]:
+                print(f"[DEBUG] tanaka gold row: {texts}")
+                # Prefer retail column if identified
+                targets = []
+                if retail_col is not None and retail_col < len(texts):
+                    targets = [texts[retail_col]] + [t for i, t in enumerate(texts[1:], 1) if i != retail_col]
+                else:
+                    targets = texts[1:]
+                for t in targets:
                     m = re.search(r'([\d,]+)', t)
                     if m:
-                        v = int(m.group().replace(",", ""))
-                        if 5000 <= v <= 30000:
-                            prices.append(v)
-                if prices:
-                    return prices[0]
+                        price = int(m.group().replace(",", ""))
+                        if 5000 <= price <= 30000:
+                            return price
         return None
-    except:
+    except Exception as e:
+        print(f"[ERROR] tanaka: {e}")
         return None
 
 def sgn(v):
@@ -109,9 +161,9 @@ def crypto_line(name, dct):
 
 orkan  = fetch_toushin("JP90C000H1T1")
 sp500  = fetch_toushin("JP90C000H474")
-aeon   = fetch_stooq("8267.JP")
-nikkei = fetch_stooq("^NKX")
-usdjpy = fetch_stooq("USDJPY")
+aeon   = fetch_market("8267.T", "8267.JP")
+nikkei = fetch_market("^N225", "^NKX")
+usdjpy = fetch_market("USDJPY=X", "USDJPY")
 gold   = fetch_tanaka_gold()
 crypto = fetch_crypto()
 
