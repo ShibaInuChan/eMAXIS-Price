@@ -9,25 +9,56 @@ HEADERS = {
 
 def find_sp500_isin():
     try:
+        # 動作している詳細ページからナビリンクを取得してsearch URLを特定する
         r = requests.get(
-            "https://toushin-lib.fwg.ne.jp/FdsWeb/FDST010000",
-            params={"page": "1", "fundNm": "eMAXIS Slim 米国株式"},
-            headers=HEADERS,
-            timeout=10
+            "https://toushin-lib.fwg.ne.jp/FdsWeb/FDST030000?isinCd=JP90C000H1T1",
+            headers=HEADERS, timeout=10
         )
-        print(f"[DEBUG] sp500_search status={r.status_code} body={r.text[:800]}")
         soup = BeautifulSoup(r.text, "html.parser")
+
+        # 全リンクをログ出力して調査
         for a in soup.find_all("a", href=True):
+            print(f"[DEBUG] nav link: href={a['href'][:80]} text={a.get_text(strip=True)[:30]}")
+
+        # 「ファンドを探す」「検索」等のリンクを探す
+        search_url = None
+        for a in soup.find_all("a", href=True):
+            text = a.get_text(strip=True)
+            href = a["href"]
+            if any(k in text for k in ["ファンドを探す", "検索"]) and href and not href.startswith("#"):
+                search_url = href if href.startswith("http") else f"https://toushin-lib.fwg.ne.jp{href}"
+                print(f"[DEBUG] search_url: {search_url}")
+                break
+
+        # フォールバック: 代表的なパスを試す
+        if not search_url:
+            for url in [
+                "https://toushin-lib.fwg.ne.jp/FdsWeb/FDST000000",
+                "https://toushin-lib.fwg.ne.jp/FdsWeb/FDST020000",
+            ]:
+                r2 = requests.get(url, headers=HEADERS, timeout=5)
+                print(f"[DEBUG] fallback {url}: {r2.status_code}")
+                if r2.status_code == 200:
+                    search_url = url
+                    break
+
+        if not search_url:
+            return None
+
+        # S&P500ファンドを検索
+        r3 = requests.get(search_url, params={"fundNm": "eMAXIS Slim 米国株式"}, headers=HEADERS, timeout=10)
+        print(f"[DEBUG] search result: status={r3.status_code} body={r3.text[:500]}")
+        soup3 = BeautifulSoup(r3.text, "html.parser")
+        for a in soup3.find_all("a", href=True):
             href = a["href"]
             text = a.get_text(strip=True)
             if "FDST030000" in href and "isinCd=" in href:
                 m = re.search(r"isinCd=([A-Z0-9]+)", href)
-                if m:
-                    print(f"[DEBUG] sp500 candidate ISIN={m.group(1)} text={text}")
-                    if any(k in text for k in ["S&P", "米国株式"]):
-                        return m.group(1)
+                if m and any(k in text for k in ["S&P", "米国株式"]):
+                    print(f"[DEBUG] found S&P500 ISIN: {m.group(1)}")
+                    return m.group(1)
     except Exception as e:
-        print(f"[ERROR] sp500_search: {e}")
+        print(f"[ERROR] find_sp500_isin: {e}")
     return None
 
 def fetch_toushin(isin):
@@ -55,7 +86,7 @@ def fetch_toushin(isin):
 
 def fetch_yf(symbol):
     try:
-        hist = yf.Ticker(symbol).history(period="2d")
+        hist = yf.Ticker(symbol).history(period="5d")
         print(f"[DEBUG] yf {symbol}: rows={len(hist)}, last={hist['Close'].iloc[-1] if len(hist) else 'N/A'}")
         if len(hist) < 1:
             return None, None, None
