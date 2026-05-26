@@ -8,55 +8,55 @@ HEADERS = {
 }
 
 def find_sp500_isin():
+    base = "https://toushin-lib.fwg.ne.jp"
+    search_url = base + "/FdsWeb/FDST999900"
     try:
-        # 動作している詳細ページからナビリンクを取得してsearch URLを特定する
-        r = requests.get(
-            "https://toushin-lib.fwg.ne.jp/FdsWeb/FDST030000?isinCd=JP90C000H1T1",
-            headers=HEADERS, timeout=10
-        )
+        # フォーム構造を確認
+        r = requests.get(search_url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
+        for form in soup.find_all("form"):
+            print(f"[DEBUG] form action={form.get('action')} method={form.get('method')}")
+            for inp in form.find_all(["input", "select"]):
+                print(f"[DEBUG] field name={inp.get('name')} type={inp.get('type')} value={str(inp.get('value',''))[:30]}")
 
-        # 全リンクをログ出力して調査
-        for a in soup.find_all("a", href=True):
-            print(f"[DEBUG] nav link: href={a['href'][:80]} text={a.get_text(strip=True)[:30]}")
+        # ベースページのisinCdリンク数確認
+        base_isins = [a for a in soup.find_all("a", href=True) if "isinCd=" in a["href"]]
+        print(f"[DEBUG] isinCd links in base page: {len(base_isins)}")
+        for a in base_isins[:3]:
+            print(f"[DEBUG] sample: {a['href'][:80]} text={a.get_text(strip=True)[:40]}")
 
-        # 「ファンドを探す」「検索」等のリンクを探す
-        search_url = None
-        for a in soup.find_all("a", href=True):
-            text = a.get_text(strip=True)
-            href = a["href"]
-            if any(k in text for k in ["ファンドを探す", "検索"]) and href and not href.startswith("#"):
-                search_url = href if href.startswith("http") else f"https://toushin-lib.fwg.ne.jp{href}"
-                print(f"[DEBUG] search_url: {search_url}")
-                break
-
-        # フォールバック: 代表的なパスを試す
-        if not search_url:
-            for url in [
-                "https://toushin-lib.fwg.ne.jp/FdsWeb/FDST000000",
-                "https://toushin-lib.fwg.ne.jp/FdsWeb/FDST020000",
-            ]:
-                r2 = requests.get(url, headers=HEADERS, timeout=5)
-                print(f"[DEBUG] fallback {url}: {r2.status_code}")
-                if r2.status_code == 200:
-                    search_url = url
-                    break
-
-        if not search_url:
-            return None
-
-        # S&P500ファンドを検索
-        r3 = requests.get(search_url, params={"fundNm": "eMAXIS Slim 米国株式"}, headers=HEADERS, timeout=10)
-        print(f"[DEBUG] search result: status={r3.status_code} body={r3.text[:500]}")
-        soup3 = BeautifulSoup(r3.text, "html.parser")
-        for a in soup3.find_all("a", href=True):
+        # POST で検索
+        r2 = requests.post(
+            search_url,
+            data={"fundNm": "eMAXIS Slim 米国株式"},
+            headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
+            timeout=10
+        )
+        soup2 = BeautifulSoup(r2.text, "html.parser")
+        print(f"[DEBUG] POST status={r2.status_code}")
+        for a in soup2.find_all("a", href=True):
             href = a["href"]
             text = a.get_text(strip=True)
-            if "FDST030000" in href and "isinCd=" in href:
+            if "isinCd=" in href:
                 m = re.search(r"isinCd=([A-Z0-9]+)", href)
-                if m and any(k in text for k in ["S&P", "米国株式"]):
-                    print(f"[DEBUG] found S&P500 ISIN: {m.group(1)}")
-                    return m.group(1)
+                if m:
+                    print(f"[DEBUG] POST isin={m.group(1)} text={text[:50]}")
+                    if any(k in text for k in ["S&P", "米国株式"]):
+                        return m.group(1)
+
+        # GET で異なるパラメータを試す
+        for params in [{"fundNm": "eMAXIS Slim 米国株式"}, {"keyword": "eMAXIS Slim 米国株式"}, {"q": "eMAXIS Slim 米国株式"}]:
+            r3 = requests.get(search_url, params=params, headers=HEADERS, timeout=10)
+            soup3 = BeautifulSoup(r3.text, "html.parser")
+            links = [a for a in soup3.find_all("a", href=True) if "isinCd=" in a["href"]]
+            print(f"[DEBUG] GET {list(params.keys())[0]}: isinCd links={len(links)}")
+            for a in links[:3]:
+                m = re.search(r"isinCd=([A-Z0-9]+)", a["href"])
+                text = a.get_text(strip=True)
+                if m:
+                    print(f"[DEBUG] - isin={m.group(1)} text={text[:50]}")
+                    if any(k in text for k in ["S&P", "米国株式"]):
+                        return m.group(1)
     except Exception as e:
         print(f"[ERROR] find_sp500_isin: {e}")
     return None
@@ -86,17 +86,13 @@ def fetch_toushin(isin):
 
 def fetch_yf(symbol):
     try:
-        hist = yf.Ticker(symbol).history(period="5d")
-        print(f"[DEBUG] yf {symbol}: rows={len(hist)}, last={hist['Close'].iloc[-1] if len(hist) else 'N/A'}")
-        if len(hist) < 1:
-            return None, None, None
-        price = float(hist["Close"].iloc[-1])
-        if len(hist) >= 2:
-            prev = float(hist["Close"].iloc[-2])
-            change = round(price - prev, 4)
-            pct = round(change / prev * 100, 2)
-        else:
-            change = pct = None
+        ticker = yf.Ticker(symbol)
+        fi = ticker.fast_info
+        price = float(fi.last_price)
+        prev = float(fi.previous_close)
+        print(f"[DEBUG] yf {symbol}: price={price:.2f}, prev_close={prev:.2f}")
+        change = round(price - prev, 4)
+        pct = round(change / prev * 100, 2)
         return price, change, pct
     except Exception as e:
         print(f"[ERROR] yf {symbol}: {e}")
