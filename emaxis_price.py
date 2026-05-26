@@ -1,19 +1,40 @@
 import requests, os, re
 from bs4 import BeautifulSoup
-from urllib.parse import quote
-from datetime import date, timedelta
+import yfinance as yf
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "ja-JP,ja;q=0.9",
 }
 
+def find_sp500_isin():
+    try:
+        r = requests.get(
+            "https://toushin-lib.fwg.ne.jp/FdsWeb/FDST010000",
+            params={"page": "1", "fundNm": "eMAXIS Slim 米国株式"},
+            headers=HEADERS,
+            timeout=10
+        )
+        print(f"[DEBUG] sp500_search status={r.status_code} body={r.text[:800]}")
+        soup = BeautifulSoup(r.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            text = a.get_text(strip=True)
+            if "FDST030000" in href and "isinCd=" in href:
+                m = re.search(r"isinCd=([A-Z0-9]+)", href)
+                if m:
+                    print(f"[DEBUG] sp500 candidate ISIN={m.group(1)} text={text}")
+                    if any(k in text for k in ["S&P", "米国株式"]):
+                        return m.group(1)
+    except Exception as e:
+        print(f"[ERROR] sp500_search: {e}")
+    return None
+
 def fetch_toushin(isin):
     try:
         r = requests.get(f"https://toushin-lib.fwg.ne.jp/FdsWeb/FDST030000?isinCd={isin}", headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
         lines = [l.strip() for l in soup.get_text().split("\n") if l.strip()]
-        print(f"[DEBUG] toushin {isin} first30lines: {lines[:30]}")
         price = change = date_str = pct = None
         for line in lines:
             if "基準日" in line:
@@ -26,58 +47,29 @@ def fetch_toushin(isin):
                 change = int(line)
             if re.match(r'^\([+-]?\d+\.\d+%\)$', line) and pct is None:
                 pct = line.strip("()")
-        print(f"[DEBUG] toushin {isin}: price={price}, change={change}, date={date_str}, pct={pct}")
+        print(f"[DEBUG] toushin {isin}: price={price}, change={change}, date={date_str}")
         return price, change, date_str, pct
     except Exception as e:
         print(f"[ERROR] toushin {isin}: {e}")
         return None, None, None, None
 
-def fetch_yahoo_v7(symbol):
+def fetch_yf(symbol):
     try:
-        r = requests.get(
-            f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={quote(symbol)}",
-            headers={**HEADERS, "Accept": "application/json"},
-            timeout=10
-        )
-        print(f"[DEBUG] yahoo_v7 {symbol} status={r.status_code} body={r.text[:300]}")
-        results = r.json()["quoteResponse"]["result"]
-        if not results:
+        hist = yf.Ticker(symbol).history(period="2d")
+        print(f"[DEBUG] yf {symbol}: rows={len(hist)}, last={hist['Close'].iloc[-1] if len(hist) else 'N/A'}")
+        if len(hist) < 1:
             return None, None, None
-        d = results[0]
-        price = d.get("regularMarketPrice")
-        change = d.get("regularMarketChange")
-        pct = d.get("regularMarketChangePercent")
+        price = float(hist["Close"].iloc[-1])
+        if len(hist) >= 2:
+            prev = float(hist["Close"].iloc[-2])
+            change = round(price - prev, 4)
+            pct = round(change / prev * 100, 2)
+        else:
+            change = pct = None
         return price, change, pct
     except Exception as e:
-        print(f"[ERROR] yahoo_v7 {symbol}: {e}")
+        print(f"[ERROR] yf {symbol}: {e}")
         return None, None, None
-
-def fetch_stooq(symbol):
-    try:
-        d2 = date.today().strftime("%Y%m%d")
-        d1 = (date.today() - timedelta(days=10)).strftime("%Y%m%d")
-        url = f"https://stooq.com/q/d/l/?s={quote(symbol)}&d1={d1}&d2={d2}&i=d"
-        r = requests.get(url, timeout=10)
-        print(f"[DEBUG] stooq {symbol} status={r.status_code} body={r.text[:200]}")
-        rows = [l for l in r.text.strip().split("\n")[1:] if l.strip()]
-        if len(rows) < 2:
-            return None, None, None
-        curr = rows[-1].split(",")
-        prev = rows[-2].split(",")
-        price = float(curr[4])
-        prev_price = float(prev[4])
-        change = round(price - prev_price, 4)
-        pct = round(change / prev_price * 100, 2)
-        return price, change, pct
-    except Exception as e:
-        print(f"[ERROR] stooq {symbol}: {e}")
-        return None, None, None
-
-def fetch_market(yf_symbol, stooq_symbol):
-    price, change, pct = fetch_yahoo_v7(yf_symbol)
-    if price is not None:
-        return price, change, pct
-    return fetch_stooq(stooq_symbol)
 
 def fetch_crypto():
     try:
@@ -95,38 +87,14 @@ def fetch_tanaka_gold():
     try:
         r = requests.get("https://gold.tanaka.co.jp/commodity/souba/", headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-
-        # Find which column index is 店頭小売価格
-        retail_col = None
         for row in soup.find_all("tr"):
             cells = row.find_all(["td", "th"])
             texts = [c.get_text(strip=True) for c in cells]
-            print(f"[DEBUG] tanaka row: {texts}")
-            for i, t in enumerate(texts):
-                if "小売" in t or "販売" in t:
-                    retail_col = i
-            if retail_col is not None:
-                break
-
-        print(f"[DEBUG] tanaka retail_col={retail_col}")
-
-        for row in soup.find_all("tr"):
-            cells = row.find_all(["td", "th"])
-            texts = [c.get_text(strip=True) for c in cells]
-            if texts and re.fullmatch(r'金', texts[0]):
-                print(f"[DEBUG] tanaka gold row: {texts}")
-                # Prefer retail column if identified
-                targets = []
-                if retail_col is not None and retail_col < len(texts):
-                    targets = [texts[retail_col]] + [t for i, t in enumerate(texts[1:], 1) if i != retail_col]
-                else:
-                    targets = texts[1:]
-                for t in targets:
-                    m = re.search(r'([\d,]+)', t)
-                    if m:
-                        price = int(m.group().replace(",", ""))
-                        if 5000 <= price <= 30000:
-                            return price
+            # 構造: ['金', '25,917 円', '+253 円', '25,368 円', '+61 円', '価格推移']
+            if len(texts) >= 2 and re.fullmatch(r'金', texts[0]):
+                m = re.search(r'([\d,]+)', texts[1])
+                if m:
+                    return int(m.group().replace(",", ""))
         return None
     except Exception as e:
         print(f"[ERROR] tanaka: {e}")
@@ -141,10 +109,10 @@ def fmt(v, d=0):
     return f"{v:,.{d}f}" if d else f"{round(v):,}"
 
 def fund_line(name, data):
-    price, change, date_str, pct = data
+    price, change, _, pct = data
     if price is None:
         return f"{name}: 取得失敗"
-    return f"{name}: {fmt(price)} 円  {sgn(change)} {fmt(abs(change or 0))} ({pct})  {date_str}"
+    return f"{name}: {fmt(price)} 円  {sgn(change)} {fmt(abs(change or 0))} ({pct})"
 
 def stock_line(name, data, d=0):
     price, change, pct = data
@@ -159,11 +127,12 @@ def crypto_line(name, dct):
         return f"{name}: 取得失敗"
     return f"{name}: {fmt(p)} 円  {sgn(c)} {fmt(abs(c or 0), 2)}%"
 
+sp500_isin = find_sp500_isin()
 orkan  = fetch_toushin("JP90C000H1T1")
-sp500  = fetch_toushin("JP90C000H474")
-aeon   = fetch_market("8267.T", "8267.JP")
-nikkei = fetch_market("^N225", "^NKX")
-usdjpy = fetch_market("USDJPY=X", "USDJPY")
+sp500  = fetch_toushin(sp500_isin) if sp500_isin else (None, None, None, None)
+aeon   = fetch_yf("8267.T")
+nikkei = fetch_yf("^N225")
+usdjpy = fetch_yf("USDJPY=X")
 gold   = fetch_tanaka_gold()
 crypto = fetch_crypto()
 
@@ -171,11 +140,13 @@ btc = crypto.get("bitcoin", {})
 eth = crypto.get("ethereum", {})
 xrp = crypto.get("ripple", {})
 
+date_str = orkan[2] or ""
+header = f"📊 本日の資産価格（{date_str}）" if date_str else "📊 本日の資産価格"
 fx_line = f"ドル円: {fmt(usdjpy[0], 2)} 円  {sgn(usdjpy[1])} {fmt(abs(usdjpy[1] or 0), 2)} ({fmt(usdjpy[2], 2)}%)" if usdjpy[0] else "ドル円: 取得失敗"
 gold_line = f"金（田中貴金属）: {fmt(gold)} 円/g" if gold else "金（田中貴金属）: 取得失敗"
 
 message = "\n".join([
-    "📊 本日の資産価格",
+    header,
     "",
     "【投資信託】",
     fund_line("オルカン", orkan),
