@@ -122,14 +122,21 @@ def fetch_tanaka_gold():
             cells = row.find_all(["td", "th"])
             texts = [c.get_text(strip=True) for c in cells]
             # 構造: ['金', '25,917 円', '+253 円', '25,368 円', '+61 円', '価格推移']
-            if len(texts) >= 2 and re.fullmatch(r'金', texts[0]):
-                m = re.search(r'([\d,]+)', texts[1])
-                if m:
-                    return int(m.group().replace(",", ""))
-        return None
+            if len(texts) >= 3 and re.fullmatch(r'金', texts[0]):
+                pm = re.search(r'([\d,]+)', texts[1])
+                cm = re.search(r'([+-]?\d+)', texts[2])
+                price = int(pm.group().replace(",", "")) if pm else None
+                change = int(cm.group()) if cm else None
+                return price, change
+        return None, None
     except Exception as e:
         print(f"[ERROR] tanaka: {e}")
-        return None
+        return None, None
+
+def trend(v):
+    if v is None:
+        return "➖"
+    return "📈" if v >= 0 else "📉"
 
 def sgn(v):
     return "▲" if (v or 0) >= 0 else "▼"
@@ -142,21 +149,21 @@ def fmt(v, d=0):
 def fund_line(name, data):
     price, change, _, pct = data
     if price is None:
-        return f"{name}: 取得失敗"
-    return f"{name}: {fmt(price)} 円  {sgn(change)} {fmt(abs(change or 0))} ({pct})"
+        return f"➖ {name}: 取得失敗"
+    return f"{trend(change)} {name}: {fmt(price)} 円  {sgn(change)} {fmt(abs(change or 0))} ({pct})"
 
 def stock_line(name, data, d=0):
     price, change, pct = data
     if price is None:
-        return f"{name}: 取得失敗"
-    return f"{name}: {fmt(price, d)} 円  {sgn(change)} {fmt(abs(change or 0), d)} ({fmt(pct, 2)}%)"
+        return f"➖ {name}: 取得失敗"
+    return f"{trend(change)} {name}: {fmt(price, d)} 円  {sgn(change)} {fmt(abs(change or 0), d)} ({fmt(pct, 2)}%)"
 
 def crypto_line(name, dct):
     p = dct.get("jpy")
     c = dct.get("jpy_24h_change")
     if p is None:
-        return f"{name}: 取得失敗"
-    return f"{name}: {fmt(p)} 円  {sgn(c)} {fmt(abs(c or 0), 2)}%"
+        return f"➖ {name}: 取得失敗"
+    return f"{trend(c)} {name}: {fmt(p)} 円  {sgn(c)} {fmt(abs(c or 0), 2)}%"
 
 sp500_isin = find_sp500_isin()
 orkan  = fetch_toushin("JP90C000H1T1")
@@ -164,7 +171,7 @@ sp500  = fetch_toushin(sp500_isin) if sp500_isin else (None, None, None, None)
 aeon   = fetch_yf("8267.T")
 nikkei = fetch_yf("^N225")
 usdjpy = fetch_yf("USDJPY=X")
-gold   = fetch_tanaka_gold()
+gold, gold_change = fetch_tanaka_gold()
 crypto = fetch_crypto()
 
 btc = crypto.get("bitcoin", {})
@@ -173,8 +180,16 @@ xrp = crypto.get("ripple", {})
 
 date_str = orkan[2] or ""
 header = f"📊 本日の資産価格（{date_str}）" if date_str else "📊 本日の資産価格"
-fx_line = f"ドル円: {fmt(usdjpy[0], 2)} 円  {sgn(usdjpy[1])} {fmt(abs(usdjpy[1] or 0), 2)} ({fmt(usdjpy[2], 2)}%)" if usdjpy[0] else "ドル円: 取得失敗"
-gold_line = f"金（田中貴金属）: {fmt(gold)} 円/g" if gold else "金（田中貴金属）: 取得失敗"
+
+if usdjpy[0]:
+    fx_line = f"{trend(usdjpy[1])} ドル円: {fmt(usdjpy[0], 2)} 円  {sgn(usdjpy[1])} {fmt(abs(usdjpy[1] or 0), 2)} ({fmt(usdjpy[2], 2)}%)"
+else:
+    fx_line = "➖ ドル円: 取得失敗"
+
+if gold:
+    gold_line = f"{trend(gold_change)} 金（田中貴金属）: {fmt(gold)} 円/g"
+else:
+    gold_line = "➖ 金（田中貴金属）: 取得失敗"
 
 message = "\n".join([
     header,
