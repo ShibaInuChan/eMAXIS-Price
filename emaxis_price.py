@@ -168,5 +168,15 @@ message = "\n".join([
     crypto_line("XRP", xrp),
 ])
 
-print('[DIAG] skipping LINE push for verification run')
+requests.post(
+    "https://api.line.me/v2/bot/message/push",
+    headers={
+        "Authorization": f"Bearer {os.environ['LINE_TOKEN']}",
+        "Content-Type": "application/json"
+    },
+    json={
+        "to": os.environ["LINE_USER_ID"],
+        "messages": [{"type": "text", "text": message}]
+    }
+)
 print(message)
