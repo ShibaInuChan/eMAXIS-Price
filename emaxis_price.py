@@ -27,6 +27,16 @@ def fetch_toushin(isin):
                 change = int(line)
             if re.match(r'^\([+-]?\d+\.\d+%\)$', line) and pct is None:
                 pct = line.strip("()")
+
+        # 前日比の符号はテキストに含まれず、fds-positive/negative-number-fg の
+        # ラッパー要素（と矢印アイコン）でのみ表現されているため、別途判定する
+        fg = soup.select_one(".fds-positive-number-fg, .fds-negative-number-fg")
+        if fg and change is not None:
+            is_negative = "fds-negative-number-fg" in (fg.get("class") or [])
+            change = -abs(change) if is_negative else abs(change)
+            if pct and not pct.startswith(("+", "-")):
+                pct = f"{'-' if is_negative else '+'}{pct}"
+
         print(f"[DEBUG] toushin {isin}: price={price}, change={change}, date={date_str}")
         return price, change, date_str, pct
     except Exception as e:
